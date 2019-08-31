@@ -15,9 +15,19 @@
  * (First standard adapter uses 6-2)
  */
 
+enum AdapterState {
+  NormalInput,
+  ModifiedInput,
+  ModifyX,
+  ModifyY,
+  ModifyTriggers
+};
+
+AdapterState state;
 CGamecubeController GamecubeController(2);
 CGamecubeConsole GamecubeConsole(10);
 Gamecube_Data_t d = defaultGamecubeData;
+Gamecube_Report_t nullReport;
 
 double default_range[] = {1, 71, 91, 105, 128, 151, 165, 185, 240};
 double x_range[] = {1, 71, 91, 125, 128, 131, 165, 185, 240};
@@ -28,6 +38,7 @@ int y_cache[256];
 
 void setup() {
   setup_cache();
+  state = ModifiedInput; // This will have to be saved to EEPROM
   // put your setup code here, to run once:
   Serial.begin(115200);
 }
@@ -40,18 +51,51 @@ void setup_cache(){
   }
 }
 
-Gamecube_Report_t report;
-void take_input() {
-  if (GamecubeController.read()){
-    report = GamecubeController.getReport();
-    report.xAxis = x_cache[report.xAxis];
-    report.yAxis = y_cache[report.yAxis];
-    GamecubeConsole.write(report);
+void modify_input(Gamecube_Report_t report) {
+  report.xAxis = x_cache[report.xAxis];
+  report.yAxis = y_cache[report.yAxis];
+  GamecubeConsole.write(report);
+}
+
+void check_state_change(Gamecube_Report_t report){
+  switch (state){
+    case ModifiedInput:
+      if (report.z && report.r && report.l && report.cxAxis < 100){
+        state = ModifyX;
+      }
+      if (report.z && report.r && report.l && report.cxAxis > 160){
+        state = ModifyY;
+      }
+    case ModifyX:  
+      if (report.b){
+        state = ModifiedInput;
+      }
+      break;
+    case ModifyY:
+      if (report.b){
+        state = ModifiedInput;
+      }
+      break;
   }
 }
 
+Gamecube_Report_t report;
 void loop() {
-  take_input();
+  if (GamecubeController.read()){
+    report = GamecubeController.getReport();
+  }
+  check_state_change(report);
+  switch (state){
+    case ModifiedInput:
+      modify_input(report);
+      break;
+    case ModifyX:
+      GamecubeConsole.write(nullReport);
+      break;
+    case ModifyY:
+      GamecubeConsole.write(nullReport);
+      break;
+  }
 }
 
 // Returns the index for the appropriate custom range start
@@ -68,11 +112,6 @@ int find_bands(int x, double range[]){
 // type = 0 for x, 1 for y
 int translate_input(int input, int isX, double range[]){
   int idx = find_bands(input, range);
-//  if (isX){
-//    idx = x_cache[input];
-//  } else {
-//    idx = y_cache[input];
-//  }
   if (idx == -1){
     Serial.println("Error finding band");
     return input; // Error finding the band, just return the default input
